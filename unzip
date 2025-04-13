@@ -1,1 +1,63 @@
+#!/usr/bin/env python3
 
+import zipfile
+import os
+import hashlib
+import jsonschema
+import json
+
+def calculate_hash(file_path, hash_algorithm):
+    hash_func = hashlib.new(hash_algorithm)
+    with open(file_path, 'rb') as file:
+        while chunk := file.read(8192):
+            hash_func.update(chunk)
+    return hash_func.hexdigest()
+
+def validate_json(file_path, schema):
+    with open(file_path, 'r') as file:
+        data = json.load(file)
+        jsonschema.validate(instance=data, schema=schema)
+
+def extract_zip(zip_file_path, output_dir, expected_file_list, json_schema=None):
+    # Verify the integrity of the zip file
+    if not zipfile.is_zipfile(zip_file_path):
+        raise ValueError("The provided file is not a valid zip archive.")
+
+    with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
+        # Extract all the contents into the specified directory
+        zip_ref.extractall(output_dir)
+
+        # Check the extracted files against the expected file list
+        extracted_files = zip_ref.namelist()
+        for file_name in expected_file_list:
+            file_path = os.path.join(output_dir, file_name)
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"Extracted file {file_name} is missing.")
+
+        # Verify the file contents to ensure they are not corrupted
+        for file_name in extracted_files:
+            file_path = os.path.join(output_dir, file_name)
+            with open(file_path, 'rb') as file:
+                if file.read() == b'':
+                    raise ValueError(f"Extracted file {file_name} is corrupted or empty.")
+
+        # Compare the sizes of the extracted files with the sizes of the original files in the zip archive
+        for file_info in zip_ref.infolist():
+            extracted_file_path = os.path.join(output_dir, file_info.filename)
+            if os.path.getsize(extracted_file_path) != file_info.file_size:
+                raise ValueError(f"Extracted file {file_info.filename} size does not match the original size in the zip archive.")
+
+        # Calculate the hash of each extracted file and compare it with the hash of the original file in the zip archive
+        for file_info in zip_ref.infolist():
+            extracted_file_path = os.path.join(output_dir, file_info.filename)
+            original_hash = calculate_hash(extracted_file_path, 'sha256')
+            extracted_hash = calculate_hash(extracted_file_path, 'sha256')
+            if original_hash != extracted_hash:
+                raise ValueError(f"Extracted file {file_info.filename} hash does not match the original hash in the zip archive.")
+
+        # Validate JSON files using a JSON schema validator
+        if json_schema:
+            for file_name in extracted_files:
+                if file_name.endswith('.json'):
+                    file_path = os.path.join(output_dir, file_name)
+                    validate_json(file_path, json_schema)
